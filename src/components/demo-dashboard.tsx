@@ -10,11 +10,7 @@ import {
   SEQUENTIAL_MAX_DURATION,
   RACE_TIMEOUT_SECONDS,
 } from '@/lib/constants';
-import {
-  type Job,
-  type ScenarioState,
-  type ChainRunResponse,
-} from '@/lib/types';
+import { type Job, type ScenarioState } from '@/lib/types';
 
 const initialJobs = (): Job[] =>
   Array.from({ length: TOTAL_STEPS }, (_, index) => ({
@@ -90,19 +86,31 @@ export function DemoDashboard() {
   const sequentialTimer = useElapsedTimer();
   const raceTimer = useElapsedTimer();
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
-
   const runChained = useCallback(async () => {
     setChainedState({ status: 'running', jobs: initialJobs(), elapsed: 0 });
-    chainedTimer.start((elapsed) =>
-      setChainedState((prev) => ({ ...prev, elapsed }))
-    );
+
+    const jobDurationMs = CHAINED_JOB_DURATION_SECONDS * 1000;
+    const totalJobs = TOTAL_STEPS;
+
+    chainedTimer.start((elapsed) => {
+      setChainedState((prev) => {
+        const currentStep = Math.min(
+          Math.floor(elapsed / jobDurationMs) + 1,
+          totalJobs
+        );
+
+        const updatedJobs = prev.jobs.map((job) => {
+          if (job.step < currentStep) {
+            return { ...job, status: 'complete' as const, durationMs: jobDurationMs };
+          } else if (job.step === currentStep) {
+            return { ...job, status: 'running' as const };
+          }
+          return job;
+        });
+
+        return { ...prev, elapsed, jobs: updatedJobs };
+      });
+    });
 
     try {
       const res = await fetch('/api/chained/1', {
@@ -115,57 +123,28 @@ export function DemoDashboard() {
         throw new Error(`Step 1 failed: ${res.statusText}`);
       }
 
-      const { runId } = await res.json();
+      // Wait for estimated total duration, then mark complete
+      const totalDurationMs = jobDurationMs * totalJobs;
+      await new Promise((resolve) => setTimeout(resolve, totalDurationMs));
 
+      chainedTimer.stop();
       setChainedState((prev) => ({
         ...prev,
-        jobs: prev.jobs.map((j) =>
-          j.step === 1 ? { ...j, status: 'running' } : j
-        ),
+        status: 'complete',
+        jobs: prev.jobs.map((job) => ({
+          ...job,
+          status: 'complete',
+          durationMs: jobDurationMs,
+        })),
       }));
-
-      pollRef.current = setInterval(async () => {
-        try {
-          const statusRes = await fetch(`/api/chain-status?runId=${runId}`);
-          if (!statusRes.ok) return;
-
-          const run: ChainRunResponse = await statusRes.json();
-
-          setChainedState((prev) => ({
-            ...prev,
-            jobs: run.jobs.map((j) => ({
-              step: j.step,
-              status: j.status === 'pending' ? 'idle' : j.status,
-              durationMs: j.durationMs,
-            })),
-          }));
-
-          if (run.status === 'complete') {
-            if (pollRef.current) clearInterval(pollRef.current);
-            chainedTimer.stop();
-            setChainedState((prev) => ({ ...prev, status: 'complete' }));
-          } else if (run.status === 'failed') {
-            if (pollRef.current) clearInterval(pollRef.current);
-            chainedTimer.stop();
-            const failedJob = run.jobs.find((j) => j.status === 'failed');
-            setChainedState((prev) => ({
-              ...prev,
-              status: 'error',
-              error: failedJob?.error ?? 'A step in the chain failed',
-            }));
-          }
-        } catch {
-          // polling error — keep trying
-        }
-      }, 1000);
     } catch (error) {
       chainedTimer.stop();
       setChainedState((prev) => ({
         ...prev,
         status: 'error',
         error: error instanceof Error ? error.message : 'Unknown error',
-        jobs: prev.jobs.map((j) =>
-          j.status === 'running' ? { ...j, status: 'failed' } : j
+        jobs: prev.jobs.map((job) =>
+          job.status === 'running' ? { ...job, status: 'failed' } : job
         ),
       }));
     }

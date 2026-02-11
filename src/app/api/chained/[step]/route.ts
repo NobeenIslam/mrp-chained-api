@@ -1,12 +1,6 @@
 import { after, NextResponse } from 'next/server';
 import { simulateJob } from '@/lib/jobs';
 import {
-  createRun,
-  markJobRunning,
-  markJobComplete,
-  markJobFailed,
-} from '@/lib/chain-store';
-import {
   TOTAL_STEPS,
   CHAINED_JOB_DURATION_SECONDS,
 } from '@/lib/constants';
@@ -25,9 +19,7 @@ export async function POST(
 
   if (!VALID_STEPS.has(step)) {
     return NextResponse.json(
-      {
-        error: `Invalid step: ${stepParam}. Must be 1-${TOTAL_STEPS}.`,
-      },
+      { error: `Invalid step: ${stepParam}. Must be 1-${TOTAL_STEPS}.` },
       { status: 400 }
     );
   }
@@ -35,20 +27,12 @@ export async function POST(
   const body = await request.json().catch(() => ({}));
   const runId: string = body.runId ?? crypto.randomUUID();
 
-  if (step === 1) {
-    createRun(runId, TOTAL_STEPS);
-  }
-
-  const durationSeconds = CHAINED_JOB_DURATION_SECONDS;
-
   console.log(
-    `[chained] Run ${runId} — Step ${step} starting (${durationSeconds}s)...`
+    `[chained] Run ${runId} — Step ${step} starting (${CHAINED_JOB_DURATION_SECONDS}s)...`
   );
-  markJobRunning(runId, step);
 
   try {
-    const result = await simulateJob(step, durationSeconds);
-    markJobComplete(runId, step, result.durationMs);
+    const result = await simulateJob(step, CHAINED_JOB_DURATION_SECONDS);
     console.log(
       `[chained] Run ${runId} — Step ${step} complete (${result.durationMs}ms)`
     );
@@ -75,21 +59,11 @@ export async function POST(
             console.error(
               `[after] Run ${runId} — Step ${nextStep} returned ${res.status}: ${text}`
             );
-            markJobFailed(
-              runId,
-              nextStep,
-              `Step ${nextStep} returned HTTP ${res.status}`
-            );
           }
         } catch (err) {
           console.error(
             `[after] Run ${runId} — Failed to trigger step ${nextStep}:`,
             err
-          );
-          markJobFailed(
-            runId,
-            nextStep,
-            err instanceof Error ? err.message : 'Failed to trigger'
           );
         }
       });
@@ -103,13 +77,8 @@ export async function POST(
 
     return NextResponse.json({ runId, ...result });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Unknown error';
-    markJobFailed(runId, step, message);
-    console.error(
-      `[chained] Run ${runId} — Step ${step} failed:`,
-      error
-    );
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[chained] Run ${runId} — Step ${step} failed:`, error);
     return NextResponse.json(
       { runId, step, error: message },
       { status: 500 }
