@@ -1,4 +1,4 @@
-import { JobScenario } from '@/generated/prisma/enums';
+import { JobScenario } from '@prisma/client';
 import { simulateJob } from '@/lib/jobs';
 import { TOTAL_STEPS, SEQUENTIAL_JOB_DURATION_SECONDS } from '@/lib/constants';
 import {

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { JobScenario } from '@/generated/prisma/enums';
+import { JobScenario } from '@prisma/client';
 import { formatPersistedRun, listRuns } from '@/lib/run-store';
 
 const scenarioParamToEnum = (scenario: string) => {

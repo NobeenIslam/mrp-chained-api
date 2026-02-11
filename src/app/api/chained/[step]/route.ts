@@ -1,5 +1,5 @@
 import { after, NextResponse } from 'next/server';
-import { JobScenario, JobStatus } from '@/generated/prisma/enums';
+import { JobScenario, JobStatus } from '@prisma/client';
 import { simulateJob } from '@/lib/jobs';
 import { TOTAL_STEPS, CHAINED_JOB_DURATION_SECONDS } from '@/lib/constants';
 import {

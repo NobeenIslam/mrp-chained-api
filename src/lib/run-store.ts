@@ -1,5 +1,5 @@
-import { JobScenario, JobStatus } from '@/generated/prisma/enums';
-import type { Prisma } from '@/generated/prisma/client';
+import { JobScenario, JobStatus } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { TOTAL_STEPS } from '@/lib/constants';
 import { prisma } from '@/lib/prisma';
 import { type PersistedRun } from '@/lib/types';
