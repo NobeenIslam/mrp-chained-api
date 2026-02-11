@@ -5,7 +5,7 @@ export const TOTAL_STEPS = 4;
 
 // Chained route: 4 jobs × 5s = 20s total across 4 invocations (maxDuration=15s each)
 export const CHAINED_JOB_DURATION_SECONDS = 4;
-export const CHAINED_MAX_DURATION = 6;
+export const CHAINED_MAX_DURATION = 12;
 
 // Sequential route: 4 jobs × 6s = 24s total in one invocation (maxDuration=20s)
 // Vercel will kill this before completion

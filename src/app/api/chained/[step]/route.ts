@@ -14,7 +14,7 @@ import {
 } from '@/lib/run-store';
 
 // maxDuration must be a static literal for Vercel's build-time analysis
-export const maxDuration = 6;
+export const maxDuration = 12;
 
 const VALID_STEPS = new Set(
   Array.from({ length: TOTAL_STEPS }, (_, index) => index + 1)
