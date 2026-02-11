@@ -1,10 +1,11 @@
 import { simulateJob } from '@/lib/jobs';
 import { config } from '@/lib/config';
 
-export const maxDuration = 39;
+export const maxDuration = config.sequential.maxDuration;
 
 export async function POST() {
   const encoder = new TextEncoder();
+  const raceTimeoutMs = config.sequential.raceTimeout * 1000;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -12,22 +13,28 @@ export async function POST() {
       const completedSteps: number[] = [];
 
       const raceTimeout = new Promise<'timeout'>((resolve) => {
-        setTimeout(() => resolve('timeout'), config.raceTimeoutMs);
+        setTimeout(() => resolve('timeout'), raceTimeoutMs);
       });
 
       try {
         for (let step = 1; step <= config.totalSteps; step++) {
+          const durationSeconds = config.chained.jobDurations[step - 1] ?? 10;
+
           controller.enqueue(
             encoder.encode(
               JSON.stringify({
                 type: 'start',
                 step,
+                durationSeconds,
                 timestamp: Date.now() - startTime,
               }) + '\n'
             )
           );
 
-          const result = await Promise.race([simulateJob(step), raceTimeout]);
+          const result = await Promise.race([
+            simulateJob(step, durationSeconds),
+            raceTimeout,
+          ]);
 
           if (result === 'timeout') {
             controller.enqueue(
@@ -37,7 +44,7 @@ export async function POST() {
                   completedSteps,
                   failedStep: step,
                   elapsed: Date.now() - startTime,
-                  message: `Promise.race timeout after ${config.raceTimeoutMs}ms — aborting gracefully before Vercel's maxDuration (${maxDuration}s) kills the process`,
+                  message: `Promise.race timeout after ${config.sequential.raceTimeout}s — aborting gracefully before Vercel's maxDuration (${maxDuration}s) kills the process`,
                 }) + '\n'
               )
             );
@@ -51,7 +58,7 @@ export async function POST() {
               JSON.stringify({
                 type: 'complete',
                 step,
-                duration: result.duration,
+                durationMs: result.durationMs,
                 timestamp: Date.now() - startTime,
               }) + '\n'
             )
@@ -74,8 +81,7 @@ export async function POST() {
               type: 'error',
               completedSteps,
               elapsed: Date.now() - startTime,
-              message:
-                error instanceof Error ? error.message : 'Unknown error',
+              message: error instanceof Error ? error.message : 'Unknown error',
             }) + '\n'
           )
         );

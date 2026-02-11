@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -16,7 +16,7 @@ type JobStatus = 'idle' | 'running' | 'complete' | 'failed' | 'timeout';
 type Job = {
   step: number;
   status: JobStatus;
-  duration?: number;
+  durationMs?: number;
 };
 
 type ScenarioStatus = 'idle' | 'running' | 'complete' | 'error';
@@ -89,6 +89,10 @@ function StatusBadge({ status }: { status: ScenarioStatus }) {
   }
 }
 
+function formatSeconds(s: number): string {
+  return `${s}s`;
+}
+
 function formatMs(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
@@ -100,9 +104,9 @@ function JobList({ jobs }: { jobs: Job[] }) {
         <li key={job.step} className="flex items-center gap-3 text-sm">
           <StatusIcon status={job.status} />
           <span className="font-mono">Job {job.step}</span>
-          {job.duration !== undefined && (
+          {job.durationMs !== undefined && (
             <span className="text-muted-foreground ml-auto">
-              {formatMs(job.duration)}
+              {formatMs(job.durationMs)}
             </span>
           )}
         </li>
@@ -216,6 +220,19 @@ async function readNDJSONStream(
   }
 }
 
+type ChainRunResponse = {
+  id: string;
+  status: 'running' | 'complete' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  jobs: {
+    step: number;
+    status: 'pending' | 'running' | 'complete' | 'failed';
+    durationMs?: number;
+    error?: string;
+  }[];
+};
+
 export function DemoDashboard() {
   const [chainedState, setChainedState] = useState<ScenarioState>(
     initialState()
@@ -229,6 +246,14 @@ export function DemoDashboard() {
   const sequentialTimer = useElapsedTimer();
   const raceTimer = useElapsedTimer();
 
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
   const runChained = useCallback(async () => {
     setChainedState({ status: 'running', jobs: initialJobs(), elapsed: 0 });
     chainedTimer.start((elapsed) =>
@@ -236,34 +261,63 @@ export function DemoDashboard() {
     );
 
     try {
-      for (let step = 1; step <= TOTAL_STEPS; step++) {
-        setChainedState((prev) => ({
-          ...prev,
-          jobs: prev.jobs.map((j) =>
-            j.step === step ? { ...j, status: 'running' } : j
-          ),
-        }));
+      const res = await fetch('/api/chained/1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
 
-        const res = await fetch(`/api/chained/${step}`, { method: 'POST' });
-
-        if (!res.ok) {
-          throw new Error(`Step ${step} failed: ${res.statusText}`);
-        }
-
-        const result = await res.json();
-
-        setChainedState((prev) => ({
-          ...prev,
-          jobs: prev.jobs.map((j) =>
-            j.step === step
-              ? { ...j, status: 'complete', duration: result.duration }
-              : j
-          ),
-        }));
+      if (!res.ok) {
+        throw new Error(`Step 1 failed: ${res.statusText}`);
       }
 
-      chainedTimer.stop();
-      setChainedState((prev) => ({ ...prev, status: 'complete' }));
+      const { runId } = await res.json();
+
+      setChainedState((prev) => ({
+        ...prev,
+        jobs: prev.jobs.map((j) =>
+          j.step === 1 ? { ...j, status: 'running' } : j
+        ),
+      }));
+
+      pollRef.current = setInterval(async () => {
+        try {
+          const statusRes = await fetch(
+            `/api/chained/status?runId=${runId}`
+          );
+          if (!statusRes.ok) return;
+
+          const run: ChainRunResponse = await statusRes.json();
+
+          setChainedState((prev) => ({
+            ...prev,
+            jobs: run.jobs.map((j) => ({
+              step: j.step,
+              status: j.status === 'pending' ? 'idle' : j.status,
+              durationMs: j.durationMs,
+            })),
+          }));
+
+          if (run.status === 'complete') {
+            if (pollRef.current) clearInterval(pollRef.current);
+            chainedTimer.stop();
+            setChainedState((prev) => ({ ...prev, status: 'complete' }));
+          } else if (run.status === 'failed') {
+            if (pollRef.current) clearInterval(pollRef.current);
+            chainedTimer.stop();
+            const failedJob = run.jobs.find((j) => j.status === 'failed');
+            setChainedState((prev) => ({
+              ...prev,
+              status: 'error',
+              error:
+                failedJob?.error ??
+                'A step in the chain failed',
+            }));
+          }
+        } catch {
+          // polling error — keep trying
+        }
+      }, 1000);
     } catch (error) {
       chainedTimer.stop();
       setChainedState((prev) => ({
@@ -308,7 +362,7 @@ export function DemoDashboard() {
                 ? {
                     ...j,
                     status: 'complete',
-                    duration: event.duration as number,
+                    durationMs: event.durationMs as number,
                   }
                 : j
             ),
@@ -358,7 +412,9 @@ export function DemoDashboard() {
     );
 
     try {
-      const res = await fetch('/api/sequential-with-race', { method: 'POST' });
+      const res = await fetch('/api/sequential-with-race', {
+        method: 'POST',
+      });
 
       await readNDJSONStream(res, (event) => {
         const type = event.type as string;
@@ -378,7 +434,7 @@ export function DemoDashboard() {
                 ? {
                     ...j,
                     status: 'complete',
-                    duration: event.duration as number,
+                    durationMs: event.durationMs as number,
                   }
                 : j
             ),
@@ -421,10 +477,9 @@ export function DemoDashboard() {
     }
   }, [raceTimer]);
 
-  const jobDuration = process.env.NEXT_PUBLIC_JOB_DURATION_MS || '10000';
-  const simulatedTimeout =
-    process.env.NEXT_PUBLIC_SIMULATED_TIMEOUT_MS || '39000';
-  const raceTimeout = process.env.NEXT_PUBLIC_RACE_TIMEOUT_MS || '38000';
+  const seqMaxDuration =
+    process.env.NEXT_PUBLIC_SEQUENTIAL_MAX_DURATION || '40';
+  const raceTimeout = process.env.NEXT_PUBLIC_SEQUENTUAL_RACE || '30';
 
   return (
     <div className="mx-auto max-w-6xl space-y-8 p-8">
@@ -438,38 +493,35 @@ export function DemoDashboard() {
       </div>
 
       <div className="text-muted-foreground flex flex-wrap gap-4 rounded-md border p-4 font-mono text-xs">
-        <span>JOB_DURATION: {formatMs(Number(jobDuration))}</span>
-        <span>SIMULATED_TIMEOUT: {formatMs(Number(simulatedTimeout))}</span>
-        <span>RACE_TIMEOUT: {formatMs(Number(raceTimeout))}</span>
-        <span>
-          TOTAL_WORK: {formatMs(Number(jobDuration) * TOTAL_STEPS)}
-        </span>
+        <span>SEQUENTIAL_MAX_DURATION: {formatSeconds(Number(seqMaxDuration))}</span>
+        <span>RACE_TIMEOUT: {formatSeconds(Number(raceTimeout))}</span>
+        <span>TOTAL_JOB_WORK: ~{formatSeconds(10 * TOTAL_STEPS)}</span>
       </div>
 
       <div className="grid gap-6 md:grid-cols-3">
         <ScenarioCard
-          title="1. Client-Side Chaining"
-          description="4 separate API routes called sequentially by the client. Each has maxDuration=15s."
-          details={`The client calls /api/chained/1, waits for the response, then calls /api/chained/2, and so on. Each route only runs for ~${formatMs(Number(jobDuration))} — well within its maxDuration. Uses after() for post-response logging (check terminal).`}
-          expectedOutcome={`All 4 jobs complete in ~${formatMs(Number(jobDuration) * TOTAL_STEPS)}`}
+          title="1. Chained with after()"
+          description="4 routes chained server-side via after(). Each has its own maxDuration."
+          details="Client calls /api/chained/1 only. Route 1 does its job (~10s), responds, then after() triggers Route 2 internally. Route 2 triggers Route 3, and so on. No single route exceeds its maxDuration — total work is ~40s but each route only handles ~10s."
+          expectedOutcome="All 4 jobs complete in ~40s. Check terminal for [after] logs."
           onRun={runChained}
           state={chainedState}
         />
 
         <ScenarioCard
           title="2. Single Route (Timeout)"
-          description={`1 API route runs all 4 jobs. maxDuration=${Math.round(Number(simulatedTimeout) / 1000)}s — not enough.`}
-          details={`All 4 jobs run sequentially in a single route, streaming progress via NDJSON. Total work is ~${formatMs(Number(jobDuration) * TOTAL_STEPS)} but maxDuration is only ${formatMs(Number(simulatedTimeout))}. Simulates Vercel killing the route.`}
-          expectedOutcome={`Timeout at ~${formatMs(Number(simulatedTimeout))} with incomplete jobs`}
+          description={`1 route runs all 4 jobs. Simulated maxDuration=${seqMaxDuration}s.`}
+          details={`All 4 jobs run sequentially in one route (~40s total). Simulated Vercel timeout fires at ${seqMaxDuration}s, aborting mid-execution.`}
+          expectedOutcome={`Timeout at ~${seqMaxDuration}s with incomplete jobs`}
           onRun={runSequential}
           state={sequentialState}
         />
 
         <ScenarioCard
           title="3. Promise.race (Graceful)"
-          description={`Same as #2 but uses Promise.race with a ${formatMs(Number(raceTimeout))} timeout.`}
-          details={`Races each job against a global timeout timer. When the timer fires before a job completes, the route returns a clean error response instead of being killed by Vercel. You control the failure mode.`}
-          expectedOutcome={`Graceful timeout at ~${formatMs(Number(raceTimeout))} with partial results`}
+          description={`Same as #2 but Promise.race aborts at ${raceTimeout}s.`}
+          details={`Each job races against a global ${raceTimeout}s timer. When the timer wins, the route returns a clean error response instead of being killed. You control the failure mode.`}
+          expectedOutcome={`Graceful timeout at ~${raceTimeout}s with partial results`}
           onRun={runRace}
           state={raceState}
         />

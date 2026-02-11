@@ -1,9 +1,7 @@
-import { config } from '@/lib/config';
-
 export type JobResult = {
   step: number;
   status: 'complete';
-  duration: number;
+  durationMs: number;
 };
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -28,9 +26,10 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 export async function simulateJob(
   step: number,
+  durationSeconds: number,
   signal?: AbortSignal
 ): Promise<JobResult> {
-  const duration = config.jobDurationMs;
-  await sleep(duration, signal);
-  return { step, status: 'complete', duration };
+  const durationMs = durationSeconds * 1000;
+  await sleep(durationMs, signal);
+  return { step, status: 'complete', durationMs };
 }

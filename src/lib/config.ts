@@ -1,7 +1,18 @@
 export const config = {
-  jobDurationMs: Number(process.env.NEXT_PUBLIC_JOB_DURATION_MS) || 10_000,
-  simulatedTimeoutMs:
-    Number(process.env.NEXT_PUBLIC_SIMULATED_TIMEOUT_MS) || 39_000,
-  raceTimeoutMs: Number(process.env.NEXT_PUBLIC_RACE_TIMEOUT_MS) || 38_000,
+  chained: {
+    maxDuration: Number(process.env.NEXT_CHAINED_MAX_DURATION) || 15,
+    jobDurations: [
+      Number(process.env.NEXT_CHAINED_JOB_ONE_DURATION) || 10,
+      Number(process.env.NEXT_CHAINED_JOB_TWO_DURATION) || 10,
+      Number(process.env.NEXT_CHAINED_JOB_THREE_DURATION) || 10,
+      Number(process.env.NEXT_CHAINED_JOB_FOUR_DURATION) || 10,
+    ] as readonly number[],
+  },
+  sequential: {
+    maxDuration:
+      Number(process.env.NEXT_PUBLIC_SEQUENTIAL_MAX_DURATION) || 40,
+    raceTimeout:
+      Number(process.env.NEXT_PUBLIC_SEQUENTUAL_RACE) || 30,
+  },
   totalSteps: 4,
 } as const;
