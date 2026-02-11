@@ -1,0 +1,18 @@
+#To run the database locally
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: nextjs_starter
+    restart: always
+    ports:
+      - "${PORT}:5432"
+    environment:
+      POSTGRES_USER: ${LOCAL_DB_USER}
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD}
+      POSTGRES_DB: ${LOCAL_DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
