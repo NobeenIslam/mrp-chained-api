@@ -27,3 +27,26 @@ export type ChainRunResponse = {
     error?: string;
   }[];
 };
+
+export type PersistedRunStatus = 'pending' | 'ongoing' | 'completed' | 'failed';
+
+export type PersistedRunScenario = 'chained' | 'sequential' | 'race';
+
+export type PersistedRunStep = {
+  step: number;
+  status: PersistedRunStatus;
+  durationMs: number | null;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+
+export type PersistedRun = {
+  id: string;
+  scenario: PersistedRunScenario;
+  status: PersistedRunStatus;
+  error: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  steps: PersistedRunStep[];
+};

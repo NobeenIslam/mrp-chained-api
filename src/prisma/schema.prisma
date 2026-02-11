@@ -6,6 +6,19 @@ datasource db {
   provider = "postgresql"
 }
 
+enum JobStatus {
+  PENDING
+  ONGOING
+  COMPLETED
+  FAILED
+}
+
+enum JobScenario {
+  CHAINED
+  SEQUENTIAL
+  RACE
+}
+
 model User {
   id    Int     @id @default(autoincrement())
   email String  @unique
@@ -20,4 +33,33 @@ model Post {
   published Boolean @default(false)
   author    User    @relation(fields: [authorId], references: [id])
   authorId  Int
+}
+
+model JobRun {
+  id          String       @id @default(cuid())
+  scenario    JobScenario
+  status      JobStatus    @default(PENDING)
+  error       String?
+  startedAt   DateTime     @default(now())
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  steps       JobRunStep[]
+}
+
+model JobRunStep {
+  id          Int       @id @default(autoincrement())
+  runId       String
+  step        Int
+  status      JobStatus @default(PENDING)
+  durationMs  Int?
+  error       String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  run         JobRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, step])
+  @@index([runId])
 }

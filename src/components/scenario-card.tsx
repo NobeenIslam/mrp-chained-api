@@ -9,6 +9,8 @@ import {
 import { type ScenarioState } from '@/lib/types';
 import { StatusBadge } from '@/components/status-badge';
 import { JobList } from '@/components/job-list';
+import { RunHistory } from '@/components/run-history';
+import { type PersistedRun } from '@/lib/types';
 
 const formatMs = (ms: number): string => `${(ms / 1000).toFixed(1)}s`;
 
@@ -19,6 +21,8 @@ type ScenarioCardProps = {
   expectedOutcome: string;
   onRun: () => void;
   state: ScenarioState;
+  runId?: string;
+  runs: PersistedRun[];
 };
 
 export const ScenarioCard = ({
@@ -28,6 +32,8 @@ export const ScenarioCard = ({
   expectedOutcome,
   onRun,
   state,
+  runId,
+  runs,
 }: ScenarioCardProps) => {
   return (
     <Card>
@@ -42,6 +48,12 @@ export const ScenarioCard = ({
         <p className="text-muted-foreground text-xs">{details}</p>
         <div className="rounded-md border p-3">
           <JobList jobs={state.jobs} />
+        </div>
+        <div className="space-y-2 rounded-md border p-3">
+          <p className="text-muted-foreground text-xs font-medium">
+            Active Run: {runId ?? 'None'}
+          </p>
+          <RunHistory runs={runs} />
         </div>
         {state.elapsed > 0 && (
           <p className="text-muted-foreground text-xs">

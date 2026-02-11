@@ -10,7 +10,13 @@ import {
   SEQUENTIAL_MAX_DURATION,
   RACE_TIMEOUT_SECONDS,
 } from '@/lib/constants';
-import { type Job, type ScenarioState } from '@/lib/types';
+import {
+  type Job,
+  type PersistedRun,
+  type PersistedRunScenario,
+  type PersistedRunStatus,
+  type ScenarioState,
+} from '@/lib/types';
 
 const initialJobs = (): Job[] =>
   Array.from({ length: TOTAL_STEPS }, (_, index) => ({
@@ -24,25 +30,10 @@ const initialState = (): ScenarioState => ({
   elapsed: 0,
 });
 
-const useElapsedTimer = () => {
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startRef = useRef(0);
-
-  const start = useCallback((onTick: (elapsed: number) => void) => {
-    startRef.current = Date.now();
-    intervalRef.current = setInterval(() => {
-      onTick(Date.now() - startRef.current);
-    }, 100);
-  }, []);
-
-  const stop = useCallback(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-  }, []);
-
-  return { start, stop };
+const initialRunHistory: Record<PersistedRunScenario, PersistedRun[]> = {
+  chained: [],
+  sequential: [],
+  race: [],
 };
 
 const readNDJSONStream = async (
@@ -75,6 +66,62 @@ const readNDJSONStream = async (
   }
 };
 
+const mapStepStatusToJobStatus = (
+  status: PersistedRunStatus,
+  error: string | null
+): Job['status'] => {
+  switch (status) {
+    case 'pending':
+      return 'idle';
+    case 'ongoing':
+      return 'running';
+    case 'completed':
+      return 'complete';
+    case 'failed':
+      return error?.toLowerCase().includes('timeout') ? 'timeout' : 'failed';
+  }
+};
+
+const mapRunStatusToScenarioStatus = (
+  status: PersistedRunStatus
+): ScenarioState['status'] => {
+  switch (status) {
+    case 'pending':
+    case 'ongoing':
+      return 'running';
+    case 'completed':
+      return 'complete';
+    case 'failed':
+      return 'error';
+  }
+};
+
+const toScenarioState = (run: PersistedRun): ScenarioState => {
+  const startedAtMs = new Date(run.startedAt).getTime();
+  const endedAtMs = run.completedAt
+    ? new Date(run.completedAt).getTime()
+    : Date.now();
+
+  return {
+    status: mapRunStatusToScenarioStatus(run.status),
+    jobs: run.steps.map((step) => ({
+      step: step.step,
+      status: mapStepStatusToJobStatus(step.status, step.error),
+      durationMs: step.durationMs ?? undefined,
+    })),
+    elapsed: Math.max(endedAtMs - startedAtMs, 0),
+    error: run.error ?? undefined,
+  };
+};
+
+const groupRunsByScenario = (runs: PersistedRun[]) => ({
+  chained: runs.filter((run) => run.scenario === 'chained'),
+  sequential: runs.filter((run) => run.scenario === 'sequential'),
+  race: runs.filter((run) => run.scenario === 'race'),
+});
+
+type ActiveRunIds = Partial<Record<PersistedRunScenario, string>>;
+
 export function DemoDashboard() {
   const [chainedState, setChainedState] =
     useState<ScenarioState>(initialState());
@@ -82,73 +129,159 @@ export function DemoDashboard() {
     useState<ScenarioState>(initialState());
   const [raceState, setRaceState] = useState<ScenarioState>(initialState());
 
-  const chainedTimer = useElapsedTimer();
-  const sequentialTimer = useElapsedTimer();
-  const raceTimer = useElapsedTimer();
+  const [activeRunIds, setActiveRunIds] = useState<ActiveRunIds>({});
+  const [runHistory, setRunHistory] =
+    useState<Record<PersistedRunScenario, PersistedRun[]>>(initialRunHistory);
+  const activeRunIdsRef = useRef<ActiveRunIds>({});
+
+  const refreshRuns = useCallback(async () => {
+    try {
+      const response = await fetch('/api/runs?limit=60', {
+        cache: 'no-store',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to load runs: ${response.status}`);
+      }
+
+      const payload = (await response.json()) as { runs: PersistedRun[] };
+      const groupedRuns = groupRunsByScenario(payload.runs);
+      setRunHistory(groupedRuns);
+
+      const activeIds = activeRunIdsRef.current;
+
+      const chainedRun = activeIds.chained
+        ? groupedRuns.chained.find((run) => run.id === activeIds.chained)
+        : groupedRuns.chained[0];
+      const sequentialRun = activeIds.sequential
+        ? groupedRuns.sequential.find((run) => run.id === activeIds.sequential)
+        : groupedRuns.sequential[0];
+      const raceRun = activeIds.race
+        ? groupedRuns.race.find((run) => run.id === activeIds.race)
+        : groupedRuns.race[0];
+
+      setChainedState(
+        chainedRun ? toScenarioState(chainedRun) : initialState()
+      );
+      setSequentialState(
+        sequentialRun ? toScenarioState(sequentialRun) : initialState()
+      );
+      setRaceState(raceRun ? toScenarioState(raceRun) : initialState());
+
+      setActiveRunIds((previous) => {
+        const next = { ...previous };
+        let changed = false;
+
+        if (
+          previous.chained &&
+          (!chainedRun ||
+            chainedRun.status === 'completed' ||
+            chainedRun.status === 'failed')
+        ) {
+          delete next.chained;
+          changed = true;
+        }
+
+        if (
+          previous.sequential &&
+          (!sequentialRun ||
+            sequentialRun.status === 'completed' ||
+            sequentialRun.status === 'failed')
+        ) {
+          delete next.sequential;
+          changed = true;
+        }
+
+        if (
+          previous.race &&
+          (!raceRun ||
+            raceRun.status === 'completed' ||
+            raceRun.status === 'failed')
+        ) {
+          delete next.race;
+          changed = true;
+        }
+
+        if (!changed) {
+          return previous;
+        }
+
+        activeRunIdsRef.current = next;
+        return next;
+      });
+    } catch (error) {
+      console.error('[dashboard] Failed to refresh runs:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    activeRunIdsRef.current = activeRunIds;
+  }, [activeRunIds]);
+
+  useEffect(() => {
+    void refreshRuns();
+  }, [refreshRuns]);
+
+  const hasActiveRuns = Boolean(
+    activeRunIds.chained || activeRunIds.sequential || activeRunIds.race
+  );
+
+  useEffect(() => {
+    if (!hasActiveRuns) {
+      return;
+    }
+
+    const pollId = setInterval(() => {
+      void refreshRuns();
+    }, 1000);
+
+    return () => {
+      clearInterval(pollId);
+    };
+  }, [hasActiveRuns, refreshRuns]);
 
   const runChained = useCallback(async () => {
     setChainedState({ status: 'running', jobs: initialJobs(), elapsed: 0 });
 
-    const jobDurationMs = CHAINED_JOB_DURATION_SECONDS * 1000;
-    const totalJobs = TOTAL_STEPS;
-
-    chainedTimer.start((elapsed) => {
-      setChainedState((prev) => {
-        const currentStep = Math.min(
-          Math.floor(elapsed / jobDurationMs) + 1,
-          totalJobs
-        );
-
-        const updatedJobs = prev.jobs.map((job) => {
-          if (job.step < currentStep) {
-            return { ...job, status: 'complete' as const, durationMs: jobDurationMs };
-          } else if (job.step === currentStep) {
-            return { ...job, status: 'running' as const };
-          }
-          return job;
-        });
-
-        return { ...prev, elapsed, jobs: updatedJobs };
-      });
-    });
-
     try {
-      const res = await fetch('/api/chained/1', {
+      const response = await fetch('/api/chained/1', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
+      const payload = (await response.json()) as {
+        runId?: string;
+        error?: string;
+      };
 
-      if (!res.ok) {
-        throw new Error(`Step 1 failed: ${res.statusText}`);
+      if (!response.ok) {
+        throw new Error(payload.error ?? `Step 1 failed (${response.status})`);
       }
 
-      // Wait for estimated total duration, then mark complete
-      const totalDurationMs = jobDurationMs * totalJobs;
-      await new Promise((resolve) => setTimeout(resolve, totalDurationMs));
+      if (payload.runId) {
+        setActiveRunIds((previous) => {
+          if (previous.chained === payload.runId) {
+            return previous;
+          }
 
-      chainedTimer.stop();
-      setChainedState((prev) => ({
-        ...prev,
-        status: 'complete',
-        jobs: prev.jobs.map((job) => ({
-          ...job,
-          status: 'complete',
-          durationMs: jobDurationMs,
-        })),
-      }));
+          const next = {
+            ...previous,
+            chained: payload.runId,
+          };
+          activeRunIdsRef.current = next;
+          return next;
+        });
+      }
+
+      await refreshRuns();
     } catch (error) {
-      chainedTimer.stop();
-      setChainedState((prev) => ({
-        ...prev,
+      setChainedState((previous) => ({
+        ...previous,
         status: 'error',
         error: error instanceof Error ? error.message : 'Unknown error',
-        jobs: prev.jobs.map((job) =>
-          job.status === 'running' ? { ...job, status: 'failed' } : job
-        ),
       }));
     }
-  }, [chainedTimer]);
+  }, [refreshRuns]);
 
   const runSequential = useCallback(async () => {
     setSequentialState({
@@ -156,145 +289,83 @@ export function DemoDashboard() {
       jobs: initialJobs(),
       elapsed: 0,
     });
-    sequentialTimer.start((elapsed) =>
-      setSequentialState((prev) => ({ ...prev, elapsed }))
-    );
 
     try {
-      const res = await fetch('/api/sequential', { method: 'POST' });
-
-      await readNDJSONStream(res, (event) => {
-        const type = event.type as string;
-
-        if (type === 'start') {
-          setSequentialState((prev) => ({
-            ...prev,
-            jobs: prev.jobs.map((j) =>
-              j.step === event.step ? { ...j, status: 'running' } : j
-            ),
-          }));
-        } else if (type === 'complete') {
-          setSequentialState((prev) => ({
-            ...prev,
-            jobs: prev.jobs.map((j) =>
-              j.step === event.step
-                ? {
-                    ...j,
-                    status: 'complete',
-                    durationMs: event.durationMs as number,
-                  }
-                : j
-            ),
-          }));
-        } else if (type === 'done') {
-          sequentialTimer.stop();
-          setSequentialState((prev) => ({ ...prev, status: 'complete' }));
-        } else if (type === 'timeout') {
-          sequentialTimer.stop();
-          setSequentialState((prev) => ({
-            ...prev,
-            status: 'error',
-            error: event.message as string,
-            jobs: prev.jobs.map((j) =>
-              j.status === 'running' ? { ...j, status: 'timeout' } : j
-            ),
-          }));
-        } else if (type === 'error') {
-          sequentialTimer.stop();
-          setSequentialState((prev) => ({
-            ...prev,
-            status: 'error',
-            error: event.message as string,
-            jobs: prev.jobs.map((j) =>
-              j.status === 'running' ? { ...j, status: 'failed' } : j
-            ),
-          }));
-        }
-      });
-    } catch (error) {
-      sequentialTimer.stop();
-      setSequentialState((prev) => ({
-        ...prev,
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown error',
-        jobs: prev.jobs.map((j) =>
-          j.status === 'running' ? { ...j, status: 'failed' } : j
-        ),
-      }));
-    }
-  }, [sequentialTimer]);
-
-  const runRace = useCallback(async () => {
-    setRaceState({ status: 'running', jobs: initialJobs(), elapsed: 0 });
-    raceTimer.start((elapsed) =>
-      setRaceState((prev) => ({ ...prev, elapsed }))
-    );
-
-    try {
-      const res = await fetch('/api/sequential-with-race', {
+      const response = await fetch('/api/sequential', {
         method: 'POST',
       });
 
-      await readNDJSONStream(res, (event) => {
-        const type = event.type as string;
+      if (!response.ok) {
+        throw new Error(`Sequential route failed (${response.status})`);
+      }
 
-        if (type === 'start') {
-          setRaceState((prev) => ({
-            ...prev,
-            jobs: prev.jobs.map((j) =>
-              j.step === event.step ? { ...j, status: 'running' } : j
-            ),
-          }));
-        } else if (type === 'complete') {
-          setRaceState((prev) => ({
-            ...prev,
-            jobs: prev.jobs.map((j) =>
-              j.step === event.step
-                ? {
-                    ...j,
-                    status: 'complete',
-                    durationMs: event.durationMs as number,
-                  }
-                : j
-            ),
-          }));
-        } else if (type === 'done') {
-          raceTimer.stop();
-          setRaceState((prev) => ({ ...prev, status: 'complete' }));
-        } else if (type === 'race_timeout') {
-          raceTimer.stop();
-          setRaceState((prev) => ({
-            ...prev,
-            status: 'error',
-            error: event.message as string,
-            jobs: prev.jobs.map((j) =>
-              j.status === 'running' ? { ...j, status: 'timeout' } : j
-            ),
-          }));
-        } else if (type === 'error') {
-          raceTimer.stop();
-          setRaceState((prev) => ({
-            ...prev,
-            status: 'error',
-            error: event.message as string,
-            jobs: prev.jobs.map((j) =>
-              j.status === 'running' ? { ...j, status: 'failed' } : j
-            ),
-          }));
+      await readNDJSONStream(response, (event) => {
+        if (event.type === 'run_started' && typeof event.runId === 'string') {
+          setActiveRunIds((previous) => {
+            const runId = event.runId as string;
+            if (previous.sequential === runId) {
+              return previous;
+            }
+
+            const next = {
+              ...previous,
+              sequential: runId,
+            };
+            activeRunIdsRef.current = next;
+            return next;
+          });
         }
       });
+
+      await refreshRuns();
     } catch (error) {
-      raceTimer.stop();
-      setRaceState((prev) => ({
-        ...prev,
+      setSequentialState((previous) => ({
+        ...previous,
         status: 'error',
         error: error instanceof Error ? error.message : 'Unknown error',
-        jobs: prev.jobs.map((j) =>
-          j.status === 'running' ? { ...j, status: 'failed' } : j
-        ),
       }));
     }
-  }, [raceTimer]);
+  }, [refreshRuns]);
+
+  const runRace = useCallback(async () => {
+    setRaceState({ status: 'running', jobs: initialJobs(), elapsed: 0 });
+
+    try {
+      const response = await fetch('/api/sequential-with-race', {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Race route failed (${response.status})`);
+      }
+
+      await readNDJSONStream(response, (event) => {
+        if (event.type === 'run_started' && typeof event.runId === 'string') {
+          setActiveRunIds((previous) => {
+            const runId = event.runId as string;
+            if (previous.race === runId) {
+              return previous;
+            }
+
+            const next = {
+              ...previous,
+              race: runId,
+            };
+            activeRunIdsRef.current = next;
+            return next;
+          });
+        }
+      });
+
+      await refreshRuns();
+    } catch (error) {
+      setRaceState((previous) => ({
+        ...previous,
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }));
+    }
+  }, [refreshRuns]);
 
   const chainedTotalTime = CHAINED_JOB_DURATION_SECONDS * TOTAL_STEPS;
   const sequentialTotalTime = SEQUENTIAL_JOB_DURATION_SECONDS * TOTAL_STEPS;
@@ -330,6 +401,8 @@ export function DemoDashboard() {
           expectedOutcome={`All ${TOTAL_STEPS} jobs complete in ~${chainedTotalTime}s.`}
           onRun={runChained}
           state={chainedState}
+          runId={activeRunIds.chained ?? runHistory.chained[0]?.id}
+          runs={runHistory.chained}
         />
 
         <ScenarioCard
@@ -339,6 +412,8 @@ export function DemoDashboard() {
           expectedOutcome={`Killed by Vercel at ~${SEQUENTIAL_MAX_DURATION}s with incomplete jobs.`}
           onRun={runSequential}
           state={sequentialState}
+          runId={activeRunIds.sequential ?? runHistory.sequential[0]?.id}
+          runs={runHistory.sequential}
         />
 
         <ScenarioCard
@@ -348,6 +423,8 @@ export function DemoDashboard() {
           expectedOutcome={`Graceful timeout at ~${RACE_TIMEOUT_SECONDS}s with partial results.`}
           onRun={runRace}
           state={raceState}
+          runId={activeRunIds.race ?? runHistory.race[0]?.id}
+          runs={runHistory.race}
         />
       </div>
     </div>
