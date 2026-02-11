@@ -105,16 +105,26 @@ export const listRuns = async (
 };
 
 export const markStepOngoing = async (runId: string, step: number) => {
-  await prisma.$transaction([
-    prisma.jobRun.update({
-      where: { id: runId },
+  return prisma.$transaction(async (tx) => {
+    const updatedRun = await tx.jobRun.updateMany({
+      where: {
+        id: runId,
+        status: {
+          in: [JobStatus.PENDING, JobStatus.ONGOING],
+        },
+      },
       data: {
         status: JobStatus.ONGOING,
         error: null,
         completedAt: null,
       },
-    }),
-    prisma.jobRunStep.update({
+    });
+
+    if (updatedRun.count === 0) {
+      return false;
+    }
+
+    await tx.jobRunStep.update({
       where: {
         runId_step: {
           runId,
@@ -128,8 +138,10 @@ export const markStepOngoing = async (runId: string, step: number) => {
         durationMs: null,
         error: null,
       },
-    }),
-  ]);
+    });
+
+    return true;
+  });
 };
 
 export const markStepComplete = async (
@@ -137,12 +149,11 @@ export const markStepComplete = async (
   step: number,
   durationMs: number
 ) => {
-  await prisma.jobRunStep.update({
+  const result = await prisma.jobRunStep.updateMany({
     where: {
-      runId_step: {
-        runId,
-        step,
-      },
+      runId,
+      step,
+      status: JobStatus.ONGOING,
     },
     data: {
       status: JobStatus.COMPLETED,
@@ -151,17 +162,26 @@ export const markStepComplete = async (
       error: null,
     },
   });
+
+  return result.count > 0;
 };
 
 export const markRunComplete = async (runId: string) => {
-  await prisma.jobRun.update({
-    where: { id: runId },
+  const result = await prisma.jobRun.updateMany({
+    where: {
+      id: runId,
+      status: {
+        in: [JobStatus.PENDING, JobStatus.ONGOING],
+      },
+    },
     data: {
       status: JobStatus.COMPLETED,
       completedAt: new Date(),
       error: null,
     },
   });
+
+  return result.count > 0;
 };
 
 export const markRunFailed = async (
@@ -193,4 +213,48 @@ export const markRunFailed = async (
       completedAt: new Date(),
     },
   });
+};
+
+export const killRun = async (
+  runId: string,
+  message = 'Manually stopped via kill switch.'
+): Promise<JobRunWithSteps | null> => {
+  const existing = await getRun(runId);
+  if (!existing) {
+    return null;
+  }
+
+  if (
+    existing.status === JobStatus.COMPLETED ||
+    existing.status === JobStatus.FAILED
+  ) {
+    return existing;
+  }
+
+  const now = new Date();
+  await prisma.$transaction([
+    prisma.jobRunStep.updateMany({
+      where: {
+        runId,
+        status: {
+          in: [JobStatus.PENDING, JobStatus.ONGOING],
+        },
+      },
+      data: {
+        status: JobStatus.FAILED,
+        error: message,
+        completedAt: now,
+      },
+    }),
+    prisma.jobRun.update({
+      where: { id: runId },
+      data: {
+        status: JobStatus.FAILED,
+        error: message,
+        completedAt: now,
+      },
+    }),
+  ]);
+
+  return getRun(runId);
 };

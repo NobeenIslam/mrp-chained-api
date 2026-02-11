@@ -20,9 +20,11 @@ type ScenarioCardProps = {
   details: string;
   expectedOutcome: string;
   onRun: () => void;
+  onKill?: () => void;
   state: ScenarioState;
   runId?: string;
   runs: PersistedRun[];
+  isKilling?: boolean;
 };
 
 export const ScenarioCard = ({
@@ -31,10 +33,14 @@ export const ScenarioCard = ({
   details,
   expectedOutcome,
   onRun,
+  onKill,
   state,
   runId,
   runs,
+  isKilling = false,
 }: ScenarioCardProps) => {
+  const canKill = Boolean(onKill && state.status === 'running' && runId);
+
   return (
     <Card>
       <CardHeader>
@@ -75,6 +81,16 @@ export const ScenarioCard = ({
         >
           {state.status === 'running' ? 'Running...' : 'Run'}
         </Button>
+        {canKill && (
+          <Button
+            onClick={onKill}
+            disabled={isKilling}
+            variant="destructive"
+            className="w-full"
+          >
+            {isKilling ? 'Killing...' : 'Kill Run'}
+          </Button>
+        )}
       </CardContent>
     </Card>
   );

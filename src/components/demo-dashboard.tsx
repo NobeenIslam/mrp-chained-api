@@ -121,6 +121,7 @@ const groupRunsByScenario = (runs: PersistedRun[]) => ({
 });
 
 type ActiveRunIds = Partial<Record<PersistedRunScenario, string>>;
+type ScenarioKillState = Partial<Record<PersistedRunScenario, boolean>>;
 
 export function DemoDashboard() {
   const [chainedState, setChainedState] =
@@ -132,6 +133,7 @@ export function DemoDashboard() {
   const [activeRunIds, setActiveRunIds] = useState<ActiveRunIds>({});
   const [runHistory, setRunHistory] =
     useState<Record<PersistedRunScenario, PersistedRun[]>>(initialRunHistory);
+  const [killState, setKillState] = useState<ScenarioKillState>({});
   const activeRunIdsRef = useRef<ActiveRunIds>({});
 
   const refreshRuns = useCallback(async () => {
@@ -367,6 +369,60 @@ export function DemoDashboard() {
     }
   }, [refreshRuns]);
 
+  const killRun = useCallback(
+    async (scenario: PersistedRunScenario) => {
+      const runId =
+        activeRunIdsRef.current[scenario] ?? runHistory[scenario][0]?.id;
+      if (!runId) {
+        return;
+      }
+
+      setKillState((previous) => ({ ...previous, [scenario]: true }));
+
+      try {
+        const response = await fetch(`/api/runs/${runId}/kill`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: 'Manually stopped from dashboard kill switch.',
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Kill failed (${response.status})`);
+        }
+
+        await refreshRuns();
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Unknown error';
+
+        if (scenario === 'chained') {
+          setChainedState((previous) => ({
+            ...previous,
+            status: 'error',
+            error: message,
+          }));
+        } else if (scenario === 'sequential') {
+          setSequentialState((previous) => ({
+            ...previous,
+            status: 'error',
+            error: message,
+          }));
+        } else {
+          setRaceState((previous) => ({
+            ...previous,
+            status: 'error',
+            error: message,
+          }));
+        }
+      } finally {
+        setKillState((previous) => ({ ...previous, [scenario]: false }));
+      }
+    },
+    [refreshRuns, runHistory]
+  );
+
   const chainedTotalTime = CHAINED_JOB_DURATION_SECONDS * TOTAL_STEPS;
   const sequentialTotalTime = SEQUENTIAL_JOB_DURATION_SECONDS * TOTAL_STEPS;
 
@@ -400,9 +456,11 @@ export function DemoDashboard() {
           details={`Client calls /api/chained/1 only. Each step runs a ${CHAINED_JOB_DURATION_SECONDS}s job, responds, then after() triggers the next step. Total work is ${chainedTotalTime}s but split across ${TOTAL_STEPS} separate function invocations.`}
           expectedOutcome={`All ${TOTAL_STEPS} jobs complete in ~${chainedTotalTime}s.`}
           onRun={runChained}
+          onKill={() => void killRun('chained')}
           state={chainedState}
           runId={activeRunIds.chained ?? runHistory.chained[0]?.id}
           runs={runHistory.chained}
+          isKilling={Boolean(killState.chained)}
         />
 
         <ScenarioCard
@@ -411,9 +469,11 @@ export function DemoDashboard() {
           details={`All ${TOTAL_STEPS} jobs run sequentially in one route (${SEQUENTIAL_JOB_DURATION_SECONDS}s each = ${sequentialTotalTime}s total). Vercel kills the function at ${SEQUENTIAL_MAX_DURATION}s.`}
           expectedOutcome={`Killed by Vercel at ~${SEQUENTIAL_MAX_DURATION}s with incomplete jobs.`}
           onRun={runSequential}
+          onKill={() => void killRun('sequential')}
           state={sequentialState}
           runId={activeRunIds.sequential ?? runHistory.sequential[0]?.id}
           runs={runHistory.sequential}
+          isKilling={Boolean(killState.sequential)}
         />
 
         <ScenarioCard
@@ -422,9 +482,11 @@ export function DemoDashboard() {
           details={`Each job races against a global ${RACE_TIMEOUT_SECONDS}s timer. When the timer wins, the route returns a clean response instead of being killed by Vercel.`}
           expectedOutcome={`Graceful timeout at ~${RACE_TIMEOUT_SECONDS}s with partial results.`}
           onRun={runRace}
+          onKill={() => void killRun('race')}
           state={raceState}
           runId={activeRunIds.race ?? runHistory.race[0]?.id}
           runs={runHistory.race}
+          isKilling={Boolean(killState.race)}
         />
       </div>
     </div>

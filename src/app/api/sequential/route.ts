@@ -1,8 +1,9 @@
-import { JobScenario } from '@prisma/client';
+import { JobScenario, JobStatus } from '@prisma/client';
 import { simulateJob } from '@/lib/jobs';
 import { TOTAL_STEPS, SEQUENTIAL_JOB_DURATION_SECONDS } from '@/lib/constants';
 import {
   createRun,
+  getRun,
   markRunComplete,
   markRunFailed,
   markStepComplete,
@@ -36,8 +37,43 @@ export async function POST() {
         );
 
         for (let step = 1; step <= TOTAL_STEPS; step++) {
+          const runSnapshot = await getRun(runId);
+          if (runSnapshot?.status === JobStatus.FAILED) {
+            controller.enqueue(
+              encoder.encode(
+                JSON.stringify({
+                  type: 'manual_stop',
+                  runId,
+                  step,
+                  timestamp: Date.now() - startTime,
+                  message:
+                    runSnapshot.error ??
+                    'Run was manually stopped by kill switch.',
+                }) + '\n'
+              )
+            );
+            return;
+          }
+
           currentStep = step;
-          await markStepOngoing(runId, step);
+          const started = await markStepOngoing(runId, step);
+          if (!started) {
+            const latestRun = await getRun(runId);
+            controller.enqueue(
+              encoder.encode(
+                JSON.stringify({
+                  type: 'manual_stop',
+                  runId,
+                  step,
+                  timestamp: Date.now() - startTime,
+                  message:
+                    latestRun?.error ??
+                    'Run was stopped before step execution started.',
+                }) + '\n'
+              )
+            );
+            return;
+          }
 
           controller.enqueue(
             encoder.encode(
@@ -56,6 +92,24 @@ export async function POST() {
             SEQUENTIAL_JOB_DURATION_SECONDS
           );
 
+          const latestBeforeComplete = await getRun(runId);
+          if (latestBeforeComplete?.status === JobStatus.FAILED) {
+            controller.enqueue(
+              encoder.encode(
+                JSON.stringify({
+                  type: 'manual_stop',
+                  runId,
+                  step,
+                  timestamp: Date.now() - startTime,
+                  message:
+                    latestBeforeComplete.error ??
+                    'Run was manually stopped while step was in progress.',
+                }) + '\n'
+              )
+            );
+            return;
+          }
+
           controller.enqueue(
             encoder.encode(
               JSON.stringify({
@@ -68,10 +122,48 @@ export async function POST() {
             )
           );
 
-          await markStepComplete(runId, step, result.durationMs);
+          const markedComplete = await markStepComplete(
+            runId,
+            step,
+            result.durationMs
+          );
+          if (!markedComplete) {
+            const latestRun = await getRun(runId);
+            controller.enqueue(
+              encoder.encode(
+                JSON.stringify({
+                  type: 'manual_stop',
+                  runId,
+                  step,
+                  timestamp: Date.now() - startTime,
+                  message:
+                    latestRun?.error ??
+                    'Run was stopped before step completion was recorded.',
+                }) + '\n'
+              )
+            );
+            return;
+          }
         }
 
-        await markRunComplete(runId);
+        const markedRunComplete = await markRunComplete(runId);
+        if (!markedRunComplete) {
+          const latestRun = await getRun(runId);
+          controller.enqueue(
+            encoder.encode(
+              JSON.stringify({
+                type: 'manual_stop',
+                runId,
+                timestamp: Date.now() - startTime,
+                message:
+                  latestRun?.error ??
+                  'Run was stopped before completion could be finalized.',
+              }) + '\n'
+            )
+          );
+          return;
+        }
+
         controller.enqueue(
           encoder.encode(
             JSON.stringify({

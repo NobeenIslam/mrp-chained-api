@@ -51,6 +51,18 @@ export async function POST(
     );
   }
 
+  if (run.status === JobStatus.FAILED || run.status === JobStatus.COMPLETED) {
+    return NextResponse.json({
+      runId,
+      step,
+      status: run.status === JobStatus.FAILED ? 'aborted' : 'already_done',
+      message:
+        run.error ??
+        `Run is already ${run.status.toLowerCase()} and cannot continue.`,
+      run: formatPersistedRun(run),
+    });
+  }
+
   const existingStep = run.steps.find((runStep) => runStep.step === step);
   if (!existingStep) {
     return NextResponse.json(
@@ -74,8 +86,34 @@ export async function POST(
   );
 
   try {
-    await markStepOngoing(runId, step);
+    const started = await markStepOngoing(runId, step);
+    if (!started) {
+      const latestRun = await getRun(runId);
+      return NextResponse.json({
+        runId,
+        step,
+        status: 'aborted',
+        message:
+          latestRun?.error ?? 'Run was stopped before this step started.',
+        run: latestRun ? formatPersistedRun(latestRun) : null,
+      });
+    }
+
     const result = await simulateJob(step, CHAINED_JOB_DURATION_SECONDS);
+
+    const latestBeforeComplete = await getRun(runId);
+    if (latestBeforeComplete?.status === JobStatus.FAILED) {
+      return NextResponse.json({
+        runId,
+        step,
+        status: 'aborted',
+        message:
+          latestBeforeComplete.error ??
+          'Run was stopped while this step was executing.',
+        run: formatPersistedRun(latestBeforeComplete),
+      });
+    }
+
     await markStepComplete(runId, step, result.durationMs);
 
     console.log(
@@ -83,12 +121,33 @@ export async function POST(
     );
 
     const nextStep = step + 1;
+    const latestRun = await getRun(runId);
+
+    if (latestRun?.status === JobStatus.FAILED) {
+      return NextResponse.json({
+        runId,
+        step,
+        status: 'aborted',
+        message:
+          latestRun.error ??
+          'Run was stopped after this step completed. Next step will not run.',
+        run: formatPersistedRun(latestRun),
+      });
+    }
 
     if (nextStep <= TOTAL_STEPS) {
       const origin = new URL(request.url).origin;
       const nextUrl = `${origin}/api/chained/${nextStep}`;
 
       after(async () => {
+        const runSnapshot = await getRun(runId);
+        if (runSnapshot?.status === JobStatus.FAILED) {
+          console.log(
+            `[after] Run ${runId} — Step ${nextStep} skipped because run is failed.`
+          );
+          return;
+        }
+
         console.log(
           `[after] Run ${runId} — Triggering step ${nextStep} → ${nextUrl}`
         );
@@ -142,11 +201,11 @@ export async function POST(
       });
     }
 
-    const latestRun = await getRun(runId);
+    const finalRun = await getRun(runId);
     return NextResponse.json({
       runId,
       ...result,
-      run: latestRun ? formatPersistedRun(latestRun) : null,
+      run: finalRun ? formatPersistedRun(finalRun) : null,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
