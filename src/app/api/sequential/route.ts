@@ -1,43 +1,33 @@
 import { simulateJob } from '@/lib/jobs';
-import { config } from '@/lib/config';
 
-// maxDuration must be a static literal for Vercel. The simulated timeout
-// that demos the behavior is controlled by NEXT_PUBLIC_SEQUENTIAL_MAX_DURATION.
+// Static values for Vercel deployment
+// 4 jobs × 12s = 48s total, which exceeds maxDuration (40s)
+// Vercel will kill this function before it completes
 export const maxDuration = 40;
+const TOTAL_STEPS = 4;
+const JOB_DURATION_SECONDS = 12;
 
 export async function POST() {
   const encoder = new TextEncoder();
-  const abortController = new AbortController();
-  const timeoutMs = config.sequential.maxDuration * 1000;
 
   const stream = new ReadableStream({
     async start(controller) {
-      const timeoutId = setTimeout(() => {
-        abortController.abort();
-      }, timeoutMs);
-
       const startTime = Date.now();
 
       try {
-        for (let step = 1; step <= config.totalSteps; step++) {
-          const durationSeconds = config.chained.jobDurations[step - 1] ?? 10;
-
+        for (let step = 1; step <= TOTAL_STEPS; step++) {
           controller.enqueue(
             encoder.encode(
               JSON.stringify({
                 type: 'start',
                 step,
-                durationSeconds,
+                durationSeconds: JOB_DURATION_SECONDS,
                 timestamp: Date.now() - startTime,
               }) + '\n'
             )
           );
 
-          const result = await simulateJob(
-            step,
-            durationSeconds,
-            abortController.signal
-          );
+          const result = await simulateJob(step, JOB_DURATION_SECONDS);
 
           controller.enqueue(
             encoder.encode(
@@ -60,30 +50,16 @@ export async function POST() {
           )
         );
       } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          controller.enqueue(
-            encoder.encode(
-              JSON.stringify({
-                type: 'timeout',
-                elapsed: Date.now() - startTime,
-                message: `Simulated Vercel timeout after ${config.sequential.maxDuration}s (maxDuration exceeded)`,
-              }) + '\n'
-            )
-          );
-        } else {
-          controller.enqueue(
-            encoder.encode(
-              JSON.stringify({
-                type: 'error',
-                elapsed: Date.now() - startTime,
-                message:
-                  error instanceof Error ? error.message : 'Unknown error',
-              }) + '\n'
-            )
-          );
-        }
+        controller.enqueue(
+          encoder.encode(
+            JSON.stringify({
+              type: 'error',
+              elapsed: Date.now() - startTime,
+              message: error instanceof Error ? error.message : 'Unknown error',
+            }) + '\n'
+          )
+        );
       } finally {
-        clearTimeout(timeoutId);
         controller.close();
       }
     },

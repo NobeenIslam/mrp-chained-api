@@ -1,6 +1,5 @@
 import { after, NextResponse } from 'next/server';
 import { simulateJob } from '@/lib/jobs';
-import { config } from '@/lib/config';
 import {
   createRun,
   markJobRunning,
@@ -8,9 +7,10 @@ import {
   markJobFailed,
 } from '@/lib/chain-store';
 
-// maxDuration must be a static literal for Vercel's build-time analysis.
-// The per-step timeout behavior is controlled by NEXT_CHAINED_JOB_*_DURATION env vars.
+// Static values for Vercel deployment
 export const maxDuration = 15;
+const TOTAL_STEPS = 4;
+const JOB_DURATION_SECONDS = 5;
 
 const VALID_STEPS = new Set([1, 2, 3, 4]);
 
@@ -24,7 +24,7 @@ export async function POST(
   if (!VALID_STEPS.has(step)) {
     return NextResponse.json(
       {
-        error: `Invalid step: ${stepParam}. Must be 1-${config.totalSteps}.`,
+        error: `Invalid step: ${stepParam}. Must be 1-${TOTAL_STEPS}.`,
       },
       { status: 400 }
     );
@@ -34,10 +34,10 @@ export async function POST(
   const runId: string = body.runId ?? crypto.randomUUID();
 
   if (step === 1) {
-    createRun(runId, config.totalSteps);
+    createRun(runId, TOTAL_STEPS);
   }
 
-  const durationSeconds = config.chained.jobDurations[step - 1] ?? 10;
+  const durationSeconds = JOB_DURATION_SECONDS;
 
   console.log(
     `[chained] Run ${runId} — Step ${step} starting (${durationSeconds}s)...`
@@ -53,7 +53,7 @@ export async function POST(
 
     const nextStep = step + 1;
 
-    if (nextStep <= config.totalSteps) {
+    if (nextStep <= TOTAL_STEPS) {
       const origin = new URL(request.url).origin;
       const nextUrl = `${origin}/api/chained/${nextStep}`;
 

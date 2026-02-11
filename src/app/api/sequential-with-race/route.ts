@@ -1,13 +1,16 @@
 import { simulateJob } from '@/lib/jobs';
-import { config } from '@/lib/config';
 
-// maxDuration must be a static literal for Vercel. The Promise.race timeout
-// that demos the behavior is controlled by NEXT_PUBLIC_SEQUENTUAL_RACE.
+// Static values for Vercel deployment
+// 4 jobs × 12s = 48s total, which exceeds maxDuration (40s)
+// Promise.race with 35s timeout aborts gracefully before Vercel kills the function
 export const maxDuration = 40;
+const TOTAL_STEPS = 4;
+const JOB_DURATION_SECONDS = 12;
+const RACE_TIMEOUT_SECONDS = 35;
 
 export async function POST() {
   const encoder = new TextEncoder();
-  const raceTimeoutMs = config.sequential.raceTimeout * 1000;
+  const raceTimeoutMs = RACE_TIMEOUT_SECONDS * 1000;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -19,22 +22,21 @@ export async function POST() {
       });
 
       try {
-        for (let step = 1; step <= config.totalSteps; step++) {
-          const durationSeconds = config.chained.jobDurations[step - 1] ?? 10;
+        for (let step = 1; step <= TOTAL_STEPS; step++) {
 
           controller.enqueue(
             encoder.encode(
               JSON.stringify({
                 type: 'start',
                 step,
-                durationSeconds,
+                durationSeconds: JOB_DURATION_SECONDS,
                 timestamp: Date.now() - startTime,
               }) + '\n'
             )
           );
 
           const result = await Promise.race([
-            simulateJob(step, durationSeconds),
+            simulateJob(step, JOB_DURATION_SECONDS),
             raceTimeout,
           ]);
 
@@ -46,7 +48,7 @@ export async function POST() {
                   completedSteps,
                   failedStep: step,
                   elapsed: Date.now() - startTime,
-                  message: `Promise.race timeout after ${config.sequential.raceTimeout}s — aborting gracefully before Vercel's maxDuration (${maxDuration}s) kills the process`,
+                  message: `Promise.race timeout after ${RACE_TIMEOUT_SECONDS}s — aborting gracefully before Vercel's maxDuration (${maxDuration}s) kills the process`,
                 }) + '\n'
               )
             );
