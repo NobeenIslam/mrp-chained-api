@@ -6,11 +6,13 @@ import {
   markJobComplete,
   markJobFailed,
 } from '@/lib/chain-store';
+import {
+  TOTAL_STEPS,
+  CHAINED_JOB_DURATION_SECONDS,
+} from '@/lib/constants';
 
-// Static values for Vercel deployment
+// maxDuration must be a static literal for Vercel's build-time analysis
 export const maxDuration = 15;
-const TOTAL_STEPS = 4;
-const JOB_DURATION_SECONDS = 5;
 
 const VALID_STEPS = new Set([1, 2, 3, 4]);
 
@@ -37,7 +39,7 @@ export async function POST(
     createRun(runId, TOTAL_STEPS);
   }
 
-  const durationSeconds = JOB_DURATION_SECONDS;
+  const durationSeconds = CHAINED_JOB_DURATION_SECONDS;
 
   console.log(
     `[chained] Run ${runId} — Step ${step} starting (${durationSeconds}s)...`

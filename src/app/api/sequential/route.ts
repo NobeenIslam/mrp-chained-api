@@ -1,11 +1,13 @@
 import { simulateJob } from '@/lib/jobs';
+import {
+  TOTAL_STEPS,
+  SEQUENTIAL_JOB_DURATION_SECONDS,
+} from '@/lib/constants';
 
-// Static values for Vercel deployment
-// 4 jobs × 12s = 48s total, which exceeds maxDuration (40s)
+// maxDuration must be a static literal for Vercel's build-time analysis
+// 4 jobs × 6s = 24s total, which exceeds maxDuration (20s)
 // Vercel will kill this function before it completes
-export const maxDuration = 40;
-const TOTAL_STEPS = 4;
-const JOB_DURATION_SECONDS = 12;
+export const maxDuration = 20;
 
 export async function POST() {
   const encoder = new TextEncoder();
@@ -21,13 +23,13 @@ export async function POST() {
               JSON.stringify({
                 type: 'start',
                 step,
-                durationSeconds: JOB_DURATION_SECONDS,
+                durationSeconds: SEQUENTIAL_JOB_DURATION_SECONDS,
                 timestamp: Date.now() - startTime,
               }) + '\n'
             )
           );
 
-          const result = await simulateJob(step, JOB_DURATION_SECONDS);
+          const result = await simulateJob(step, SEQUENTIAL_JOB_DURATION_SECONDS);
 
           controller.enqueue(
             encoder.encode(
