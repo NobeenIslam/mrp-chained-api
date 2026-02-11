@@ -283,7 +283,7 @@ export function DemoDashboard() {
       pollRef.current = setInterval(async () => {
         try {
           const statusRes = await fetch(
-            `/api/chained/status?runId=${runId}`
+            `/api/chain-status?runId=${runId}`
           );
           if (!statusRes.ok) return;
 

@@ -8,7 +8,9 @@ import {
   markJobFailed,
 } from '@/lib/chain-store';
 
-export const maxDuration = config.chained.maxDuration;
+// maxDuration must be a static literal for Vercel's build-time analysis.
+// The per-step timeout behavior is controlled by NEXT_CHAINED_JOB_*_DURATION env vars.
+export const maxDuration = 15;
 
 const VALID_STEPS = new Set([1, 2, 3, 4]);
 
@@ -21,7 +23,9 @@ export async function POST(
 
   if (!VALID_STEPS.has(step)) {
     return NextResponse.json(
-      { error: `Invalid step: ${stepParam}. Must be 1-${config.totalSteps}.` },
+      {
+        error: `Invalid step: ${stepParam}. Must be 1-${config.totalSteps}.`,
+      },
       { status: 400 }
     );
   }
@@ -51,17 +55,30 @@ export async function POST(
 
     if (nextStep <= config.totalSteps) {
       const origin = new URL(request.url).origin;
+      const nextUrl = `${origin}/api/chained/${nextStep}`;
 
       after(async () => {
         console.log(
-          `[after] Run ${runId} — Triggering step ${nextStep} from after()`
+          `[after] Run ${runId} — Triggering step ${nextStep} → ${nextUrl}`
         );
         try {
-          await fetch(`${origin}/api/chained/${nextStep}`, {
+          const res = await fetch(nextUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ runId }),
           });
+
+          if (!res.ok) {
+            const text = await res.text().catch(() => '');
+            console.error(
+              `[after] Run ${runId} — Step ${nextStep} returned ${res.status}: ${text}`
+            );
+            markJobFailed(
+              runId,
+              nextStep,
+              `Step ${nextStep} returned HTTP ${res.status}`
+            );
+          }
         } catch (err) {
           console.error(
             `[after] Run ${runId} — Failed to trigger step ${nextStep}:`,
@@ -84,9 +101,16 @@ export async function POST(
 
     return NextResponse.json({ runId, ...result });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
+    const message =
+      error instanceof Error ? error.message : 'Unknown error';
     markJobFailed(runId, step, message);
-    console.error(`[chained] Run ${runId} — Step ${step} failed:`, error);
-    return NextResponse.json({ runId, step, error: message }, { status: 500 });
+    console.error(
+      `[chained] Run ${runId} — Step ${step} failed:`,
+      error
+    );
+    return NextResponse.json(
+      { runId, step, error: message },
+      { status: 500 }
+    );
   }
 }

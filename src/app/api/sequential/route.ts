@@ -1,7 +1,9 @@
 import { simulateJob } from '@/lib/jobs';
 import { config } from '@/lib/config';
 
-export const maxDuration = config.sequential.maxDuration;
+// maxDuration must be a static literal for Vercel. The simulated timeout
+// that demos the behavior is controlled by NEXT_PUBLIC_SEQUENTIAL_MAX_DURATION.
+export const maxDuration = 40;
 
 export async function POST() {
   const encoder = new TextEncoder();
