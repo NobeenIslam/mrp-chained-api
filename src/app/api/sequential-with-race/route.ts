@@ -9,7 +9,7 @@ import {
 // maxDuration must be a static literal for Vercel's build-time analysis
 // 4 jobs × 6s = 24s total, which exceeds maxDuration (20s)
 // Promise.race with 15s timeout aborts gracefully before Vercel kills the function
-export const maxDuration = 20;
+export const maxDuration = 10;
 
 export async function POST() {
   const encoder = new TextEncoder();
@@ -26,7 +26,6 @@ export async function POST() {
 
       try {
         for (let step = 1; step <= TOTAL_STEPS; step++) {
-
           controller.enqueue(
             encoder.encode(
               JSON.stringify({

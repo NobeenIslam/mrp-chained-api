@@ -1,12 +1,9 @@
 import { after, NextResponse } from 'next/server';
 import { simulateJob } from '@/lib/jobs';
-import {
-  TOTAL_STEPS,
-  CHAINED_JOB_DURATION_SECONDS,
-} from '@/lib/constants';
+import { TOTAL_STEPS, CHAINED_JOB_DURATION_SECONDS } from '@/lib/constants';
 
 // maxDuration must be a static literal for Vercel's build-time analysis
-export const maxDuration = 15;
+export const maxDuration = 10;
 
 const VALID_STEPS = new Set([1, 2, 3, 4]);
 
@@ -79,9 +76,6 @@ export async function POST(
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[chained] Run ${runId} — Step ${step} failed:`, error);
-    return NextResponse.json(
-      { runId, step, error: message },
-      { status: 500 }
-    );
+    return NextResponse.json({ runId, step, error: message }, { status: 500 });
   }
 }
