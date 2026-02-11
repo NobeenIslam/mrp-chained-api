@@ -3,7 +3,7 @@ import { simulateJob } from '@/lib/jobs';
 import { TOTAL_STEPS, CHAINED_JOB_DURATION_SECONDS } from '@/lib/constants';
 
 // maxDuration must be a static literal for Vercel's build-time analysis
-export const maxDuration = 10;
+export const maxDuration = 5;
 
 const VALID_STEPS = new Set([1, 2, 3, 4]);
 
