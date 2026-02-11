@@ -477,9 +477,11 @@ export function DemoDashboard() {
     }
   }, [raceTimer]);
 
-  const seqMaxDuration =
-    process.env.NEXT_PUBLIC_SEQUENTIAL_MAX_DURATION || '40';
-  const raceTimeout = process.env.NEXT_PUBLIC_SEQUENTUAL_RACE || '30';
+  // Static values matching the API routes
+  const chainedJobDuration = 5;
+  const sequentialJobDuration = 12;
+  const sequentialMaxDuration = 40;
+  const raceTimeoutSeconds = 35;
 
   return (
     <div className="mx-auto max-w-6xl space-y-8 p-8">
@@ -493,35 +495,35 @@ export function DemoDashboard() {
       </div>
 
       <div className="text-muted-foreground flex flex-wrap gap-4 rounded-md border p-4 font-mono text-xs">
-        <span>SEQUENTIAL_MAX_DURATION: {formatSeconds(Number(seqMaxDuration))}</span>
-        <span>RACE_TIMEOUT: {formatSeconds(Number(raceTimeout))}</span>
-        <span>TOTAL_JOB_WORK: ~{formatSeconds(10 * TOTAL_STEPS)}</span>
+        <span>Chained: {TOTAL_STEPS} jobs × {chainedJobDuration}s = {chainedJobDuration * TOTAL_STEPS}s (maxDuration=15s per step)</span>
+        <span>Sequential: {TOTAL_STEPS} jobs × {sequentialJobDuration}s = {sequentialJobDuration * TOTAL_STEPS}s (maxDuration={sequentialMaxDuration}s)</span>
+        <span>Race timeout: {raceTimeoutSeconds}s</span>
       </div>
 
       <div className="grid gap-6 md:grid-cols-3">
         <ScenarioCard
           title="1. Chained with after()"
-          description="4 routes chained server-side via after(). Each has its own maxDuration."
-          details="Client calls /api/chained/1 only. Route 1 does its job (~10s), responds, then after() triggers Route 2 internally. Route 2 triggers Route 3, and so on. No single route exceeds its maxDuration — total work is ~40s but each route only handles ~10s."
-          expectedOutcome="All 4 jobs complete in ~40s. Check terminal for [after] logs."
+          description={`${TOTAL_STEPS} routes chained server-side via after(). Each has maxDuration=15s.`}
+          details={`Client calls /api/chained/1 only. Each step runs a ${chainedJobDuration}s job, responds, then after() triggers the next step. Total work is ${chainedJobDuration * TOTAL_STEPS}s but split across ${TOTAL_STEPS} separate function invocations.`}
+          expectedOutcome={`All ${TOTAL_STEPS} jobs complete in ~${chainedJobDuration * TOTAL_STEPS}s.`}
           onRun={runChained}
           state={chainedState}
         />
 
         <ScenarioCard
           title="2. Single Route (Timeout)"
-          description={`1 route runs all 4 jobs. Simulated maxDuration=${seqMaxDuration}s.`}
-          details={`All 4 jobs run sequentially in one route (~40s total). Simulated Vercel timeout fires at ${seqMaxDuration}s, aborting mid-execution.`}
-          expectedOutcome={`Timeout at ~${seqMaxDuration}s with incomplete jobs`}
+          description={`1 route runs all ${TOTAL_STEPS} jobs. maxDuration=${sequentialMaxDuration}s.`}
+          details={`All ${TOTAL_STEPS} jobs run sequentially in one route (${sequentialJobDuration}s each = ${sequentialJobDuration * TOTAL_STEPS}s total). Vercel kills the function at ${sequentialMaxDuration}s.`}
+          expectedOutcome={`Killed by Vercel at ~${sequentialMaxDuration}s with incomplete jobs.`}
           onRun={runSequential}
           state={sequentialState}
         />
 
         <ScenarioCard
           title="3. Promise.race (Graceful)"
-          description={`Same as #2 but Promise.race aborts at ${raceTimeout}s.`}
-          details={`Each job races against a global ${raceTimeout}s timer. When the timer wins, the route returns a clean error response instead of being killed. You control the failure mode.`}
-          expectedOutcome={`Graceful timeout at ~${raceTimeout}s with partial results`}
+          description={`Same as #2 but Promise.race aborts at ${raceTimeoutSeconds}s.`}
+          details={`Each job races against a global ${raceTimeoutSeconds}s timer. When the timer wins, the route returns a clean response instead of being killed by Vercel.`}
+          expectedOutcome={`Graceful timeout at ~${raceTimeoutSeconds}s with partial results.`}
           onRun={runRace}
           state={raceState}
         />
