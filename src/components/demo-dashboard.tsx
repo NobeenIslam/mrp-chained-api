@@ -1,121 +1,34 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button } from '@/components/ui/button';
+import { ScenarioCard } from '@/components/scenario-card';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+  TOTAL_STEPS,
+  CHAINED_JOB_DURATION_SECONDS,
+  CHAINED_MAX_DURATION,
+  SEQUENTIAL_JOB_DURATION_SECONDS,
+  SEQUENTIAL_MAX_DURATION,
+  RACE_TIMEOUT_SECONDS,
+} from '@/lib/constants';
+import {
+  type Job,
+  type ScenarioState,
+  type ChainRunResponse,
+} from '@/lib/types';
 
-type JobStatus = 'idle' | 'running' | 'complete' | 'failed' | 'timeout';
-
-type Job = {
-  step: number;
-  status: JobStatus;
-  durationMs?: number;
-};
-
-type ScenarioStatus = 'idle' | 'running' | 'complete' | 'error';
-
-type ScenarioState = {
-  status: ScenarioStatus;
-  jobs: Job[];
-  elapsed: number;
-  error?: string;
-};
-
-const TOTAL_STEPS = 4;
-
-function initialJobs(): Job[] {
-  return Array.from({ length: TOTAL_STEPS }, (_, i) => ({
-    step: i + 1,
+const initialJobs = (): Job[] =>
+  Array.from({ length: TOTAL_STEPS }, (_, index) => ({
+    step: index + 1,
     status: 'idle' as const,
   }));
-}
 
-function initialState(): ScenarioState {
-  return { status: 'idle', jobs: initialJobs(), elapsed: 0 };
-}
+const initialState = (): ScenarioState => ({
+  status: 'idle',
+  jobs: initialJobs(),
+  elapsed: 0,
+});
 
-function StatusIcon({ status }: { status: JobStatus }) {
-  switch (status) {
-    case 'idle':
-      return (
-        <span className="text-muted-foreground inline-block size-5 text-center">
-          -
-        </span>
-      );
-    case 'running':
-      return (
-        <span className="inline-block size-5 animate-spin text-center text-blue-500">
-          &#9696;
-        </span>
-      );
-    case 'complete':
-      return (
-        <span className="inline-block size-5 text-center text-green-500">
-          &#10003;
-        </span>
-      );
-    case 'failed':
-      return (
-        <span className="inline-block size-5 text-center text-red-500">
-          &#10007;
-        </span>
-      );
-    case 'timeout':
-      return (
-        <span className="inline-block size-5 text-center text-amber-500">
-          &#9888;
-        </span>
-      );
-  }
-}
-
-function StatusBadge({ status }: { status: ScenarioStatus }) {
-  switch (status) {
-    case 'idle':
-      return <Badge variant="outline">Idle</Badge>;
-    case 'running':
-      return <Badge variant="secondary">Running</Badge>;
-    case 'complete':
-      return <Badge className="bg-green-600">Complete</Badge>;
-    case 'error':
-      return <Badge variant="destructive">Error</Badge>;
-  }
-}
-
-function formatSeconds(s: number): string {
-  return `${s}s`;
-}
-
-function formatMs(ms: number): string {
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function JobList({ jobs }: { jobs: Job[] }) {
-  return (
-    <ul className="space-y-2">
-      {jobs.map((job) => (
-        <li key={job.step} className="flex items-center gap-3 text-sm">
-          <StatusIcon status={job.status} />
-          <span className="font-mono">Job {job.step}</span>
-          {job.durationMs !== undefined && (
-            <span className="text-muted-foreground ml-auto">
-              {formatMs(job.durationMs)}
-            </span>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function useElapsedTimer() {
+const useElapsedTimer = () => {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startRef = useRef(0);
 
@@ -134,66 +47,12 @@ function useElapsedTimer() {
   }, []);
 
   return { start, stop };
-}
+};
 
-function ScenarioCard({
-  title,
-  description,
-  details,
-  expectedOutcome,
-  onRun,
-  state,
-}: {
-  title: string;
-  description: string;
-  details: string;
-  expectedOutcome: string;
-  onRun: () => void;
-  state: ScenarioState;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between">
-          <CardTitle>{title}</CardTitle>
-          <StatusBadge status={state.status} />
-        </div>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-muted-foreground text-xs">{details}</p>
-        <div className="rounded-md border p-3">
-          <JobList jobs={state.jobs} />
-        </div>
-        {state.elapsed > 0 && (
-          <p className="text-muted-foreground text-xs">
-            Elapsed: {formatMs(state.elapsed)}
-          </p>
-        )}
-        {state.error && (
-          <p className="rounded-md bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950 dark:text-red-300">
-            {state.error}
-          </p>
-        )}
-        <p className="text-muted-foreground text-xs italic">
-          Expected: {expectedOutcome}
-        </p>
-        <Button
-          onClick={onRun}
-          disabled={state.status === 'running'}
-          className="w-full"
-        >
-          {state.status === 'running' ? 'Running...' : 'Run'}
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
-
-async function readNDJSONStream(
+const readNDJSONStream = async (
   response: Response,
   onEvent: (event: Record<string, unknown>) => void
-) {
+) => {
   const reader = response.body?.getReader();
   if (!reader) return;
 
@@ -218,28 +77,13 @@ async function readNDJSONStream(
   if (buffer.trim()) {
     onEvent(JSON.parse(buffer));
   }
-}
-
-type ChainRunResponse = {
-  id: string;
-  status: 'running' | 'complete' | 'failed';
-  startedAt: number;
-  completedAt?: number;
-  jobs: {
-    step: number;
-    status: 'pending' | 'running' | 'complete' | 'failed';
-    durationMs?: number;
-    error?: string;
-  }[];
 };
 
 export function DemoDashboard() {
-  const [chainedState, setChainedState] = useState<ScenarioState>(
-    initialState()
-  );
-  const [sequentialState, setSequentialState] = useState<ScenarioState>(
-    initialState()
-  );
+  const [chainedState, setChainedState] =
+    useState<ScenarioState>(initialState());
+  const [sequentialState, setSequentialState] =
+    useState<ScenarioState>(initialState());
   const [raceState, setRaceState] = useState<ScenarioState>(initialState());
 
   const chainedTimer = useElapsedTimer();
@@ -282,9 +126,7 @@ export function DemoDashboard() {
 
       pollRef.current = setInterval(async () => {
         try {
-          const statusRes = await fetch(
-            `/api/chain-status?runId=${runId}`
-          );
+          const statusRes = await fetch(`/api/chain-status?runId=${runId}`);
           if (!statusRes.ok) return;
 
           const run: ChainRunResponse = await statusRes.json();
@@ -309,9 +151,7 @@ export function DemoDashboard() {
             setChainedState((prev) => ({
               ...prev,
               status: 'error',
-              error:
-                failedJob?.error ??
-                'A step in the chain failed',
+              error: failedJob?.error ?? 'A step in the chain failed',
             }));
           }
         } catch {
@@ -477,11 +317,8 @@ export function DemoDashboard() {
     }
   }, [raceTimer]);
 
-  // Static values matching the API routes
-  const chainedJobDuration = 5;
-  const sequentialJobDuration = 12;
-  const sequentialMaxDuration = 40;
-  const raceTimeoutSeconds = 35;
+  const chainedTotalTime = CHAINED_JOB_DURATION_SECONDS * TOTAL_STEPS;
+  const sequentialTotalTime = SEQUENTIAL_JOB_DURATION_SECONDS * TOTAL_STEPS;
 
   return (
     <div className="mx-auto max-w-6xl space-y-8 p-8">
@@ -495,35 +332,41 @@ export function DemoDashboard() {
       </div>
 
       <div className="text-muted-foreground flex flex-wrap gap-4 rounded-md border p-4 font-mono text-xs">
-        <span>Chained: {TOTAL_STEPS} jobs × {chainedJobDuration}s = {chainedJobDuration * TOTAL_STEPS}s (maxDuration=15s per step)</span>
-        <span>Sequential: {TOTAL_STEPS} jobs × {sequentialJobDuration}s = {sequentialJobDuration * TOTAL_STEPS}s (maxDuration={sequentialMaxDuration}s)</span>
-        <span>Race timeout: {raceTimeoutSeconds}s</span>
+        <span>
+          Chained: {TOTAL_STEPS} jobs × {CHAINED_JOB_DURATION_SECONDS}s ={' '}
+          {chainedTotalTime}s (maxDuration={CHAINED_MAX_DURATION}s per step)
+        </span>
+        <span>
+          Sequential: {TOTAL_STEPS} jobs × {SEQUENTIAL_JOB_DURATION_SECONDS}s ={' '}
+          {sequentialTotalTime}s (maxDuration={SEQUENTIAL_MAX_DURATION}s)
+        </span>
+        <span>Race timeout: {RACE_TIMEOUT_SECONDS}s</span>
       </div>
 
       <div className="grid gap-6 md:grid-cols-3">
         <ScenarioCard
           title="1. Chained with after()"
-          description={`${TOTAL_STEPS} routes chained server-side via after(). Each has maxDuration=15s.`}
-          details={`Client calls /api/chained/1 only. Each step runs a ${chainedJobDuration}s job, responds, then after() triggers the next step. Total work is ${chainedJobDuration * TOTAL_STEPS}s but split across ${TOTAL_STEPS} separate function invocations.`}
-          expectedOutcome={`All ${TOTAL_STEPS} jobs complete in ~${chainedJobDuration * TOTAL_STEPS}s.`}
+          description={`${TOTAL_STEPS} routes chained server-side via after(). Each has maxDuration=${CHAINED_MAX_DURATION}s.`}
+          details={`Client calls /api/chained/1 only. Each step runs a ${CHAINED_JOB_DURATION_SECONDS}s job, responds, then after() triggers the next step. Total work is ${chainedTotalTime}s but split across ${TOTAL_STEPS} separate function invocations.`}
+          expectedOutcome={`All ${TOTAL_STEPS} jobs complete in ~${chainedTotalTime}s.`}
           onRun={runChained}
           state={chainedState}
         />
 
         <ScenarioCard
           title="2. Single Route (Timeout)"
-          description={`1 route runs all ${TOTAL_STEPS} jobs. maxDuration=${sequentialMaxDuration}s.`}
-          details={`All ${TOTAL_STEPS} jobs run sequentially in one route (${sequentialJobDuration}s each = ${sequentialJobDuration * TOTAL_STEPS}s total). Vercel kills the function at ${sequentialMaxDuration}s.`}
-          expectedOutcome={`Killed by Vercel at ~${sequentialMaxDuration}s with incomplete jobs.`}
+          description={`1 route runs all ${TOTAL_STEPS} jobs. maxDuration=${SEQUENTIAL_MAX_DURATION}s.`}
+          details={`All ${TOTAL_STEPS} jobs run sequentially in one route (${SEQUENTIAL_JOB_DURATION_SECONDS}s each = ${sequentialTotalTime}s total). Vercel kills the function at ${SEQUENTIAL_MAX_DURATION}s.`}
+          expectedOutcome={`Killed by Vercel at ~${SEQUENTIAL_MAX_DURATION}s with incomplete jobs.`}
           onRun={runSequential}
           state={sequentialState}
         />
 
         <ScenarioCard
           title="3. Promise.race (Graceful)"
-          description={`Same as #2 but Promise.race aborts at ${raceTimeoutSeconds}s.`}
-          details={`Each job races against a global ${raceTimeoutSeconds}s timer. When the timer wins, the route returns a clean response instead of being killed by Vercel.`}
-          expectedOutcome={`Graceful timeout at ~${raceTimeoutSeconds}s with partial results.`}
+          description={`Same as #2 but Promise.race aborts at ${RACE_TIMEOUT_SECONDS}s.`}
+          details={`Each job races against a global ${RACE_TIMEOUT_SECONDS}s timer. When the timer wins, the route returns a clean response instead of being killed by Vercel.`}
+          expectedOutcome={`Graceful timeout at ~${RACE_TIMEOUT_SECONDS}s with partial results.`}
           onRun={runRace}
           state={raceState}
         />
