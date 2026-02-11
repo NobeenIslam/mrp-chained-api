@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "prisma generate",
     "dev": "next dev --port 3200",
     "build": "next build",
     "start": "next start",
