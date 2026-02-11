@@ -1,4 +1,4 @@
-# next-js-starter
+# next-js-starter.
 
 A personal baseline starter for quickly iterating on MVPs, prototyping concepts, and debugging ideas. Not meant for production — just a fast launchpad.
 
