@@ -3,7 +3,7 @@
 services:
   postgres:
     image: postgres:16
-    container_name: nextjs_starter
+    container_name: mrp-chained-api
     restart: always
     ports:
       - "${PORT}:5432"
