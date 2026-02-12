@@ -1,7 +1,13 @@
 import { after, NextResponse } from 'next/server';
 import { JobScenario, JobStatus } from '@prisma/client';
 import { simulateJob } from '@/lib/jobs';
-import { TOTAL_STEPS, CHAINED_JOB_DURATION_SECONDS } from '@/lib/constants';
+import {
+  TOTAL_STEPS,
+  CHAINED_JOB_DURATION_SECONDS,
+  CHAINED_MAX_DURATION,
+  CHAINED_STEP4_JOB_DURATION_SECONDS,
+  CHAINED_STEP4_RACE_TIMEOUT_SECONDS,
+} from '@/lib/constants';
 import {
   createRun,
   formatPersistedRun,
@@ -19,6 +25,81 @@ export const maxDuration = 10;
 const VALID_STEPS = new Set(
   Array.from({ length: TOTAL_STEPS }, (_, index) => index + 1)
 );
+
+// --- Helpers for after() callbacks ---
+
+function triggerNextStep(
+  origin: string,
+  runId: string,
+  nextStep: number
+): void {
+  const nextUrl = `${origin}/api/chained/${nextStep}`;
+
+  after(async () => {
+    console.log(
+      `[after] Run ${runId} — Triggering step ${nextStep} → ${nextUrl}`
+    );
+    try {
+      const res = await fetch(nextUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        console.error(
+          `[after] Run ${runId} — Step ${nextStep} returned ${res.status}: ${text}`
+        );
+
+        await markRunFailed(
+          runId,
+          `Step ${nextStep} failed to start (HTTP ${res.status}).`,
+          nextStep
+        ).catch((err) => {
+          console.error(
+            `[after] Run ${runId} — Failed to persist trigger error:`,
+            err
+          );
+        });
+      }
+    } catch (err) {
+      console.error(
+        `[after] Run ${runId} — Failed to trigger step ${nextStep}:`,
+        err
+      );
+      await markRunFailed(
+        runId,
+        `Step ${nextStep} failed to start after previous completion.`,
+        nextStep
+      ).catch((persistError) => {
+        console.error(
+          `[after] Run ${runId} — Failed to persist trigger failure:`,
+          persistError
+        );
+      });
+    }
+  });
+}
+
+function triggerPing(origin: string, source: string): void {
+  const pingUrl = `${origin}/api/ping`;
+
+  after(async () => {
+    console.log(`[after] Pinging ${pingUrl} from "${source}"`);
+    try {
+      const res = await fetch(pingUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source }),
+      });
+      const data = await res.json();
+      console.log(`[after] Ping response from "${source}":`, data);
+    } catch (err) {
+      console.error(`[after] Ping failed from "${source}":`, err);
+    }
+  });
+}
 
 export async function POST(
   request: Request,
@@ -69,12 +150,87 @@ export async function POST(
     });
   }
 
+  const origin = new URL(request.url).origin;
+
   console.log(
     `[chained] Run ${runId} — Step ${step} starting (${CHAINED_JOB_DURATION_SECONDS}s)...`
   );
 
   try {
     await markStepOngoing(runId, step);
+
+    // ---------------------------------------------------------------
+    // Step 4 (final): Promise.race — long job vs timeout
+    // ---------------------------------------------------------------
+    if (step === TOTAL_STEPS) {
+      const raceTimeoutMs = CHAINED_STEP4_RACE_TIMEOUT_SECONDS * 1000;
+
+      console.log(
+        `[chained] Run ${runId} — Step ${step} using Promise.race ` +
+          `(job=${CHAINED_STEP4_JOB_DURATION_SECONDS}s, timeout=${CHAINED_STEP4_RACE_TIMEOUT_SECONDS}s, maxDuration=${CHAINED_MAX_DURATION}s)`
+      );
+
+      const raceResult = await Promise.race([
+        simulateJob(step, CHAINED_STEP4_JOB_DURATION_SECONDS),
+        new Promise<'timeout'>((resolve) =>
+          setTimeout(() => resolve('timeout'), raceTimeoutMs)
+        ),
+      ]);
+
+      if (raceResult === 'timeout') {
+        const message =
+          `Step ${step} Promise.race timeout after ${CHAINED_STEP4_RACE_TIMEOUT_SECONDS}s ` +
+          `— aborted gracefully before maxDuration (${CHAINED_MAX_DURATION}s)`;
+        console.log(`[chained] Run ${runId} — ${message}`);
+
+        await markRunFailed(runId, message, step).catch((err) => {
+          console.error(
+            `[chained] Run ${runId} — Failed to persist race timeout:`,
+            err
+          );
+        });
+
+        after(() => {
+          console.log(
+            `[after] Run ${runId} — Step ${step} race timeout at ${new Date().toISOString()}`
+          );
+        });
+
+        const latestRun = await getRun(runId);
+        return NextResponse.json({
+          runId,
+          step,
+          status: 'race_timeout',
+          message,
+          run: latestRun ? formatPersistedRun(latestRun) : null,
+        });
+      }
+
+      // Race won by the job (shouldn't happen with current durations)
+      await markStepComplete(runId, step, raceResult.durationMs);
+      await markRunComplete(runId);
+
+      console.log(
+        `[chained] Run ${runId} — Step ${step} completed before race timeout (${raceResult.durationMs}ms)`
+      );
+
+      after(() => {
+        console.log(
+          `[after] Run ${runId} — All steps complete at ${new Date().toISOString()}`
+        );
+      });
+
+      const latestRun = await getRun(runId);
+      return NextResponse.json({
+        runId,
+        ...raceResult,
+        run: latestRun ? formatPersistedRun(latestRun) : null,
+      });
+    }
+
+    // ---------------------------------------------------------------
+    // Steps 1-3: Normal job execution
+    // ---------------------------------------------------------------
     const result = await simulateJob(step, CHAINED_JOB_DURATION_SECONDS);
     await markStepComplete(runId, step, result.durationMs);
 
@@ -84,61 +240,87 @@ export async function POST(
 
     const nextStep = step + 1;
 
-    if (nextStep <= TOTAL_STEPS) {
-      const origin = new URL(request.url).origin;
+    // ---------------------------------------------------------------
+    // Step 1: Normal — single after() triggers step 2
+    // ---------------------------------------------------------------
+    if (step === 1) {
+      triggerNextStep(origin, runId, nextStep);
+    }
+
+    // ---------------------------------------------------------------
+    // Step 2: TEST 1 — two separate after() calls
+    //   after #1: triggers step 3
+    //   after #2: triggers /api/ping
+    // ---------------------------------------------------------------
+    if (step === 2) {
+      console.log(
+        `[chained] Run ${runId} — Step 2: registering TWO separate after() callbacks`
+      );
+      triggerNextStep(origin, runId, nextStep);
+      triggerPing(origin, `step-2-separate-after (run ${runId})`);
+    }
+
+    // ---------------------------------------------------------------
+    // Step 3: TEST 2 — one after() with two fetch calls inside
+    //   Single after() fires both step 4 trigger AND /api/ping
+    // ---------------------------------------------------------------
+    if (step === 3) {
       const nextUrl = `${origin}/api/chained/${nextStep}`;
+      const pingUrl = `${origin}/api/ping`;
 
       after(async () => {
         console.log(
-          `[after] Run ${runId} — Triggering step ${nextStep} → ${nextUrl}`
+          `[after] Run ${runId} — Step 3: single after() firing TWO fetches`
         );
-        try {
-          const res = await fetch(nextUrl, {
+
+        const [chainRes, pingRes] = await Promise.all([
+          fetch(nextUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ runId }),
-          });
-
-          if (!res.ok) {
-            const text = await res.text().catch(() => '');
+          }).catch((err) => {
             console.error(
-              `[after] Run ${runId} — Step ${nextStep} returned ${res.status}: ${text}`
+              `[after] Run ${runId} — Step ${nextStep} trigger failed:`,
+              err
             );
+            return null;
+          }),
+          fetch(pingUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              source: `step-3-single-after (run ${runId})`,
+            }),
+          }).catch((err) => {
+            console.error(
+              `[after] Run ${runId} — Ping from step 3 failed:`,
+              err
+            );
+            return null;
+          }),
+        ]);
 
-            await markRunFailed(
-              runId,
-              `Step ${nextStep} failed to start (HTTP ${res.status}).`,
-              nextStep
-            ).catch((err) => {
-              console.error(
-                `[after] Run ${runId} — Failed to persist trigger error:`,
-                err
-              );
-            });
-          }
-        } catch (err) {
+        console.log(
+          `[after] Run ${runId} — Step 3 dual fetch results: ` +
+            `chain=${chainRes?.status ?? 'failed'}, ping=${pingRes?.status ?? 'failed'}`
+        );
+
+        if (chainRes && !chainRes.ok) {
+          const text = await chainRes.text().catch(() => '');
           console.error(
-            `[after] Run ${runId} — Failed to trigger step ${nextStep}:`,
-            err
+            `[after] Run ${runId} — Step ${nextStep} returned ${chainRes.status}: ${text}`
           );
           await markRunFailed(
             runId,
-            `Step ${nextStep} failed to start after previous completion.`,
+            `Step ${nextStep} failed to start (HTTP ${chainRes.status}).`,
             nextStep
-          ).catch((persistError) => {
+          ).catch((err) => {
             console.error(
-              `[after] Run ${runId} — Failed to persist trigger failure:`,
-              persistError
+              `[after] Run ${runId} — Failed to persist trigger error:`,
+              err
             );
           });
         }
-      });
-    } else {
-      await markRunComplete(runId);
-      after(() => {
-        console.log(
-          `[after] Run ${runId} — All steps complete at ${new Date().toISOString()}`
-        );
       });
     }
 

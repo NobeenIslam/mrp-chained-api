@@ -14,3 +14,8 @@ export const SEQUENTIAL_MAX_DURATION = 10;
 
 // Race route: Same as sequential but with graceful timeout at 15s
 export const RACE_TIMEOUT_SECONDS = 5;
+
+// Chained step 4 race test: job intentionally exceeds maxDuration,
+// Promise.race timeout fires just before Vercel kills the function
+export const CHAINED_STEP4_JOB_DURATION_SECONDS = 12;
+export const CHAINED_STEP4_RACE_TIMEOUT_SECONDS = 8;
